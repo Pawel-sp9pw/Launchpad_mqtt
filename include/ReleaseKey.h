@@ -1,0 +1,6 @@
+#pragma once
+static const char RELEASE_PUBLIC_KEY[] = R"KEY(-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFHKun2tDSu9JxQ2D9RaYTYtTpL/r
+mwnKEfgsvyxNl+W++C+F+BP3K5lSh7i2PiXW8h9rp/UpidzSH2DEGAoAmw==
+-----END PUBLIC KEY-----
+)KEY";

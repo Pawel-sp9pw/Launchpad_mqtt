@@ -1,0 +1,25 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -I include tests/domain_test.cpp -o /tmp/domain-test && /tmp/domain-test
+      - run: pytest -q
+      - run: pio run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-ci-not-a-release
+          path: .pio/build/esp32s3zero/firmware.bin
+

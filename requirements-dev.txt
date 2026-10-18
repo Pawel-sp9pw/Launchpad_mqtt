@@ -1,0 +1,5 @@
+platformio==6.1.18
+cryptography==46.0.3
+pytest==8.4.2
+requests==2.32.5
+

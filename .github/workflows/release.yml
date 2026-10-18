@@ -1,0 +1,52 @@
+name: Publish signed release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: signed-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Check signing configuration and unused version
+        env:
+          OTA_SIGNING_KEY_PEM: ${{ secrets.OTA_SIGNING_KEY_PEM }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          test -n "$OTA_SIGNING_KEY_PEM" || { echo 'Missing OTA_SIGNING_KEY_PEM repository secret'; exit 1; }
+          VERSION=$(tr -d '\r\n' < VERSION)
+          [[ "$VERSION" =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$ ]]
+          if git rev-parse "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo 'Version already exists; increase VERSION instead of replacing a release'; exit 1
+          fi
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+      - run: pip install -r requirements-dev.txt
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -I include tests/domain_test.cpp -o /tmp/domain-test && /tmp/domain-test
+      - run: pytest -q
+      - run: pio run
+      - name: Sign and verify immutable manifest
+        env:
+          OTA_SIGNING_KEY_PEM: ${{ secrets.OTA_SIGNING_KEY_PEM }}
+        run: python scripts/release.py --firmware .pio/build/esp32s3zero/firmware.bin
+      - run: python scripts/release.py --verify-only
+      - name: Upload complete assets to a draft, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" --draft --title "Launchpad MQTT v$RELEASE_VERSION" --notes-file docs/RELEASE_NOTES.md
+          gh release upload "v$RELEASE_VERSION" dist/firmware.bin dist/manifest.json dist/manifest.sig dist/SHA256SUMS dist/release-public.pem
+          gh release edit "v$RELEASE_VERSION" --draft=false --latest

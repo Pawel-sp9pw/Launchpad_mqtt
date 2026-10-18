@@ -1,0 +1,32 @@
+name: Publish approved signed artifact
+on:
+  push:
+    branches: [main]
+    paths:
+      - releases/approved.json
+      - releases/manifest.json
+      - releases/manifest.sig
+permissions:
+  contents: read
+concurrency:
+  group: signed-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cryptography==46.0.3
+      - name: Retrieve successful CI artifact and verify signed approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/publish_approved.py
+
