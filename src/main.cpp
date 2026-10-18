@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <esp_ota_ops.h>
+#include <esp_wifi.h>
 #include <mbedtls/sha256.h>
 #include "Config.h"
 #include "Domain.h"
@@ -531,6 +532,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   configLoaded = loadConfig();
   WiFi.persistent(false);
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
   WiFi.setHostname("launchpad-esp32");
   WiFi.setAutoReconnect(true);
   if (!config.ssid.isEmpty()) WiFi.begin(config.ssid.c_str(), config.wifiPassword.c_str());
