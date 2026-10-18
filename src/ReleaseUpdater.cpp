@@ -98,6 +98,14 @@ String ReleaseUpdater::status() {
   return result;
 }
 
+String ReleaseUpdater::latestVersion() {
+  if (!statusMutex_) return "";
+  xSemaphoreTake(statusMutex_, portMAX_DELAY);
+  const String result = latestVersion_;
+  xSemaphoreGive(statusMutex_);
+  return result;
+}
+
 void ReleaseUpdater::setStatus(const String &message) {
   xSemaphoreTake(statusMutex_, portMAX_DELAY);
   status_ = message;
@@ -108,22 +116,35 @@ void ReleaseUpdater::loop(bool enabled) {
   if (!enabled || WiFi.status() != WL_CONNECTED || millis() < 60000 ||
       time(nullptr) < 1735689600) return;
   if (lastCheck_ && millis() - lastCheck_ < 3600000UL) return;
-  if (!acquire()) return;
+  startCheck(true);
+}
+
+bool ReleaseUpdater::checkNow() {
+  if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1735689600) return false;
+  return startCheck(false);
+}
+
+bool ReleaseUpdater::startCheck(bool install) {
+  if (!statusMutex_ || !acquire()) return false;
+  installRequested_ = install;
   lastCheck_ = millis();
+  setStatus("checking-published-release");
   if (xTaskCreate(task, "release-ota", 12288, this, 1, nullptr) != pdPASS) {
     setStatus("worker-allocation-failed");
     release();
+    return false;
   }
+  return true;
 }
 
 void ReleaseUpdater::task(void *argument) {
   auto *updater = static_cast<ReleaseUpdater *>(argument);
-  updater->check();
+  updater->check(updater->installRequested_);
   updater->release();
   vTaskDelete(nullptr);
 }
 
-void ReleaseUpdater::check() {
+void ReleaseUpdater::check(bool install) {
   setStatus("checking-published-release");
   String body, signature;
   if (!downloadText(String(releaseBase) + "latest/download/manifest.json", body, 2048) ||
@@ -144,8 +165,9 @@ void ReleaseUpdater::check() {
     return;
   }
   const String version = document["version"].as<String>();
-  if (!domain::newer(version.c_str(), FW_VERSION)) {
-    setStatus("up-to-date");
+  uint32_t versionParts[3];
+  if (!domain::parseVersion(version.c_str(), versionParts)) {
+    setStatus("release-version-rejected");
     return;
   }
   const String url = document["url"].as<String>();
@@ -161,6 +183,21 @@ void ReleaseUpdater::check() {
     return;
   }
   const uint32_t size = document["size"];
+  if (size < 1024 || size > 0x140000) {
+    setStatus("release-size-rejected");
+    return;
+  }
+  xSemaphoreTake(statusMutex_, portMAX_DELAY);
+  latestVersion_ = version;
+  xSemaphoreGive(statusMutex_);
+  if (!domain::newer(version.c_str(), FW_VERSION)) {
+    setStatus("up-to-date");
+    return;
+  }
+  if (!install) {
+    setStatus("new-release-available");
+    return;
+  }
   const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
   const esp_partition_t *running = esp_ota_get_running_partition();
   if (!next || !running || next->address == running->address || size < 1024 ||

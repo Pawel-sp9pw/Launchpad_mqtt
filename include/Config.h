@@ -4,7 +4,7 @@
 struct Config {
   String ssid;
   String wifiPassword;
-  String mqttHost = "192.168.211.2";
+  String mqttHost = "192.168.211.3";
   uint16_t mqttPort = 1883;
   String mqttUser;
   String mqttPassword;

@@ -11,7 +11,7 @@ bool validConfig(const Config &next) {
   if (next.ssid.length() > 32 || next.wifiPassword.length() > 64 ||
       next.mqttHost.isEmpty() || next.mqttHost.length() > 128 || !next.mqttPort ||
       next.mqttUser.length() > 128 || next.mqttPassword.length() > 128 ||
-      next.adminPassword.length() < 16 || next.adminPassword.length() > 128 ||
+      next.adminPassword.length() > 128 ||
       next.baseTopic.isEmpty() || next.baseTopic.length() > 64) return false;
   if (next.baseTopic.indexOf('#') >= 0 || next.baseTopic.indexOf('+') >= 0) return false;
   for (uint8_t index = 0; index < 4; ++index) {

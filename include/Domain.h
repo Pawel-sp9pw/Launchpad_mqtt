@@ -80,4 +80,41 @@ inline bool newer(const char *candidate, const char *current) {
   }
   return false;
 }
+
+inline bool parseBounded(const char *value, uint32_t maximum, uint32_t &result) {
+  if (!value || !*value) return false;
+  uint32_t parsed = 0;
+  while (*value) {
+    if (*value < '0' || *value > '9') return false;
+    const uint32_t digit = *value++ - '0';
+    if (parsed > maximum / 10 ||
+        (parsed == maximum / 10 && digit > maximum % 10)) return false;
+    parsed = parsed * 10 + digit;
+  }
+  result = parsed;
+  return true;
+}
+
+enum class ControlResult { Ready, Offline, Invalid };
+
+inline ControlResult control(Bulb &bulb, bool brokerConnected, const char *action,
+                             uint8_t level, uint8_t color, bool warm) {
+  if (!brokerConnected || !bulb.reachable) return ControlResult::Offline;
+  if (!action) return ControlResult::Invalid;
+  if (strcmp(action, "on") == 0) {
+    if (!bulb.brightness) bulb.brightness = 8;
+  } else if (strcmp(action, "off") == 0) {
+    bulb.brightness = 0;
+  } else if (strcmp(action, "warm") == 0) {
+    bulb.brightness = 8;
+    bulb.color = 4;
+    bulb.warmPreset = true;
+  } else if (strcmp(action, "apply") == 0) {
+    if (level > 8 || color > 7) return ControlResult::Invalid;
+    bulb.brightness = level;
+    bulb.color = color;
+    bulb.warmPreset = warm;
+  } else return ControlResult::Invalid;
+  return ControlResult::Ready;
+}
 }

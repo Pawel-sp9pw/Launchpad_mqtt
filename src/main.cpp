@@ -7,6 +7,7 @@
 #include <esp_ota_ops.h>
 #include <esp_wifi.h>
 #include <mbedtls/sha256.h>
+#include <time.h>
 #include "Config.h"
 #include "Domain.h"
 #include "MqttBridge.h"
@@ -67,11 +68,10 @@ bool throughAp() {
   return apActive && server.client().localIP() == WiFi.softAPIP();
 }
 
-bool authorized(bool setupAllowed = false) {
-  if (setupAllowed && throughAp()) return true;
-  if (!config.adminPassword.isEmpty() &&
+bool authorized() {
+  if (config.adminPassword.isEmpty() ||
       server.authenticate("admin", config.adminPassword.c_str())) return true;
-  server.requestAuthentication(BASIC_AUTH, "Launchpad settings");
+  server.requestAuthentication(BASIC_AUTH, "Launchpad OTA");
   return false;
 }
 
@@ -105,8 +105,8 @@ void draw() {
   lastDraw = millis();
 }
 
-void commandBulb(uint8_t index) {
-  if (!mqtt.connected() || !bulbs[index].reachable) return;
+bool commandBulb(uint8_t index) {
+  if (index >= 4 || !mqtt.connected() || !bulbs[index].reachable) return false;
   StaticJsonDocument<256> document;
   const auto &bulb = bulbs[index];
   document["state"] = bulb.brightness ? "ON" : "OFF";
@@ -122,7 +122,7 @@ void commandBulb(uint8_t index) {
   }
   String payload;
   serializeJson(document, payload);
-  mqtt.publish(topicFor(index, "/set"), payload);
+  return mqtt.publish(topicFor(index, "/set"), payload);
 }
 
 void brokerLoop() {
@@ -259,7 +259,7 @@ void wifiLoop() {
     }
     if (now - disconnectedSince > 60000) startAp();
   }
-  if (!config.confirmed || config.adminPassword.isEmpty()) startAp();
+  if (!config.confirmed) startAp();
   static uint32_t bootHeldSince = 0;
   if (digitalRead(0) == LOW) {
     if (!bootHeldSince) bootHeldSince = now;
@@ -275,6 +275,9 @@ void statusPage() {
   document["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   document["wifi_ip"] = WiFi.localIP().toString();
   document["mqtt_connected"] = mqtt.connected();
+  document["mqtt_started"] = mqttStarted;
+  document["mqtt_host"] = config.mqttHost;
+  document["mqtt_port"] = config.mqttPort;
   document["launchpad_connected"] = midi.connected();
   document["usb_dropped"] = midi.dropped();
   document["config_source"] = configSource;
@@ -283,6 +286,7 @@ void statusPage() {
   document["setup_ap"] = apActive;
   document["auto_update"] = config.autoUpdate;
   document["update_status"] = releaseUpdater.status();
+  document["latest_release_version"] = releaseUpdater.latestVersion();
   document["update_busy"] = releaseUpdater.busy();
   document["flash_bytes"] = ESP.getFlashChipSize();
   document["firmware_bytes"] = ESP.getSketchSize();
@@ -325,7 +329,12 @@ String pageStart(const char *title) {
     "</title><style>body{font:16px system-ui;max-width:850px;margin:2rem auto;padding:1rem;"
     "background:#121821;color:#eaf0f7}a{color:#8bd4ff}label{display:block;margin-top:1rem}"
     "input{padding:.5rem;max-width:95%}button{margin-top:1.5rem;padding:.8rem}"
-    "table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #567}</style><body><h1>" +
+    "table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #567}"
+    ".lamps{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-top:1rem}"
+    ".lamp{border:1px solid #567;border-radius:12px;padding:1rem}.lamp h2{margin-top:0}"
+    "fieldset{border:0;padding:0;margin:0}fieldset:disabled{opacity:.5}select{padding:.5rem;max-width:100%}"
+    ".actions{display:flex;gap:.5rem;flex-wrap:wrap}.actions button{margin-top:1rem}"
+    "output{display:inline-block;min-width:3rem}</style><body><h1>" +
     title + "</h1>";
 }
 
@@ -347,8 +356,103 @@ void rootPage() {
       String(index == 0 ? "RGB" : "CCT") + "</td><td>" +
       String(mqtt.connected() && bulbs[index].reachable ? "online" : "offline") +
       "</td><td>" + String(domain::brightness(bulbs[index].brightness)) + "</td></tr>";
-  body += "</table><p>Aktualizacje: " + escaped(releaseUpdater.status()) + "</p></body></html>";
+  body += "</table><h2>Sterowanie żarówkami</h2><p>Poziomy jasności i kolorów odpowiadają padom "
+          "Launchpada. Wysyłanie poleceń jest dostępne tylko dla lamp online.</p><div class='lamps'>";
+  static const char *rgbNames[8] = {"Niebieski", "Błękitny", "Turkusowy", "Biały",
+      "Kremowy", "Pomarańczowy", "Czerwono-pomarańczowy", "Czerwony"};
+  for (uint8_t index = 0; index < 4; ++index) {
+    const auto &bulb = bulbs[index];
+    const bool online = mqtt.connected() && bulb.reachable;
+    body += "<section class='lamp'><h2>" + escaped(config.bulbs[index]) + "</h2><p>" +
+        String(index == 0 ? "RGB" : "CCT") + " · " + String(online ? "online" : "offline") +
+        "</p><form method='post' action='/control'><input type='hidden' name='csrf' value='" +
+        csrf + "'><input type='hidden' name='bulb' value='" + String(index) + "'><fieldset " +
+        String(online ? "" : "disabled") + "><label>Jasność<br><input name='brightness' "
+        "type='range' min='0' max='8' step='1' value='" + String(bulb.brightness) +
+        "' oninput=\"this.nextElementSibling.value=Math.round(this.value*100/8)+'%'\"> "
+        "<output>" + String((bulb.brightness * 100 + 4) / 8) + "%</output></label><label>" +
+        String(index == 0 ? "Kolor" : "Temperatura bieli") + "<br><select name='color'>";
+    body += "<option value='warm' " + String(bulb.warmPreset ? "selected" : "") +
+        ">Ciepła biel ~2700 K</option>";
+    for (uint8_t color = 0; color < 8; ++color) {
+      const String label = index == 0 ? String(rgbNames[color]) :
+          String(1000000UL / domain::colorTemperature(color)) + " K";
+      body += "<option value='" + String(color) + "' " +
+          String(!bulb.warmPreset && bulb.color == color ? "selected" : "") + ">" +
+          label + "</option>";
+    }
+    body += "</select></label><div class='actions'><button name='action' value='apply'>Zastosuj</button>"
+        "<button name='action' value='on'>Włącz</button><button name='action' value='off'>Wyłącz</button>"
+        "<button name='action' value='warm'>Ciepła biel 100%</button></div></fieldset></form></section>";
+  }
+  const String latestVersion = releaseUpdater.latestVersion();
+  body += "</div><h2>Aktualizacje</h2><p>Zainstalowana wersja: <strong>" FW_VERSION
+          "</strong><br>Najnowsze sprawdzone wydanie GitHub: <strong id='release-latest'>" +
+          escaped(latestVersion.isEmpty() ? String("jeszcze nie sprawdzono") : latestVersion) +
+          "</strong><br>Status: <span id='release-status'>" + escaped(releaseUpdater.status()) +
+          "</span></p><form method='post' action='/check-update'><input type='hidden' name='csrf' value='" +
+          csrf + "'><button id='release-check-button' " + String(releaseUpdater.busy() ? "disabled" : "") +
+          ">Sprawdź wersję na GitHub</button></form><p>Przycisk sprawdza opublikowane wydanie. "
+          "Automatyczne instalowanie włączysz w ustawieniach.</p>"
+          "<script>async function refreshRelease(){try{const response=await fetch('/status',{cache:'no-store'});"
+          "if(!response.ok)throw new Error('status');const status=await response.json();"
+          "document.getElementById('release-latest').textContent=status.latest_release_version||'jeszcze nie sprawdzono';"
+          "document.getElementById('release-status').textContent=status.update_status;"
+          "document.getElementById('release-check-button').disabled=status.update_busy;"
+          "if(status.update_busy)setTimeout(refreshRelease,1500)}catch(error){"
+          "document.getElementById('release-status').textContent='Nie udało się odświeżyć statusu';"
+          "document.getElementById('release-check-button').disabled=false}}refreshRelease();</script></body></html>";
+  server.sendHeader("Cache-Control", "no-store");
   server.send(200, "text/html; charset=utf-8", body);
+}
+
+void controlBulb() {
+  if (!validPost()) return;
+  uint32_t index, level, color = 4;
+  const bool warm = server.arg("color") == "warm";
+  if (!domain::parseBounded(server.arg("bulb").c_str(), 3, index) ||
+      !domain::parseBounded(server.arg("brightness").c_str(), 8, level) ||
+      (!warm && !domain::parseBounded(server.arg("color").c_str(), 7, color))) {
+    server.send(400, "text/plain; charset=utf-8", "Nieprawidłowe parametry sterowania.");
+    return;
+  }
+  const domain::Bulb previous = bulbs[index];
+  const auto result = domain::control(bulbs[index], mqtt.connected(),
+      server.arg("action").c_str(), level, color, warm);
+  if (result == domain::ControlResult::Offline) {
+    server.send(409, "text/plain; charset=utf-8", "Żarówka lub MQTT jest offline. Polecenie zablokowane.");
+    return;
+  }
+  if (result != domain::ControlResult::Ready) {
+    server.send(400, "text/plain; charset=utf-8", "Nieprawidłowe polecenie.");
+    return;
+  }
+  if (!commandBulb(index)) {
+    bulbs[index] = previous;
+    server.send(503, "text/plain; charset=utf-8", "Nie udało się przekazać polecenia do MQTT.");
+    return;
+  }
+  draw();
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void checkUpdate() {
+  if (!validPost()) return;
+  if (WiFi.status() != WL_CONNECTED) {
+    server.send(503, "text/plain; charset=utf-8", "Brak połączenia Wi-Fi.");
+    return;
+  }
+  if (time(nullptr) < 1735689600) {
+    server.send(503, "text/plain; charset=utf-8", "Oczekiwanie na synchronizację czasu NTP. Spróbuj za chwilę.");
+    return;
+  }
+  if (!releaseUpdater.checkNow()) {
+    server.send(409, "text/plain; charset=utf-8", "Sprawdzanie lub aktualizacja już trwa albo nie można uruchomić zadania.");
+    return;
+  }
+  server.sendHeader("Location", "/");
+  server.send(303);
 }
 
 String inputField(const char *name, const char *label, const String &value,
@@ -358,7 +462,6 @@ String inputField(const char *name, const char *label, const String &value,
 }
 
 void settingsPage() {
-  if (!authorized(true)) return;
   String body = pageStart("Ustawienia Launchpad");
   body += "<p>Puste hasło zachowuje poprzednią wartość. Zapis nie kasuje wcześniejszych "
           "namespace NVS. Po zapisie urządzenie uruchomi się ponownie.</p>"
@@ -378,8 +481,6 @@ void settingsPage() {
     const String label = "Żarówka " + String(index + 1) + (index == 0 ? " (RGB)" : " (CCT)");
     body += inputField(name.c_str(), label.c_str(), config.bulbs[index]);
   }
-  body += inputField("admin", "Hasło panelu i ArduinoOTA (min. 16 znaków; puste = bez zmian)",
-                      "", "password");
   body += "<label><input name='auto' type='checkbox' " +
           String(config.autoUpdate ? "checked" : "") +
           "> Automatyczne podpisane wydania GitHub</label>"
@@ -389,7 +490,7 @@ void settingsPage() {
 }
 
 void saveSettings() {
-  if (!authorized(true) || !validPost()) return;
+  if (!validPost()) return;
   if (releaseUpdater.busy()) { server.send(409, "text/plain", "OTA in progress"); return; }
   Config next = config;
   next.ssid = server.arg("ssid");
@@ -405,11 +506,10 @@ void saveSettings() {
   next.baseTopic = server.arg("base");
   for (uint8_t index = 0; index < 4; ++index)
     next.bulbs[index] = server.arg("bulb" + String(index));
-  if (!server.arg("admin").isEmpty()) next.adminPassword = server.arg("admin");
   next.autoUpdate = server.hasArg("auto");
   next.confirmed = true;
   if (next.ssid.isEmpty() || !saveConfig(next)) {
-    server.send(400, "text/plain", "Invalid settings or NVS write failed. Admin password: min 16 characters.");
+    server.send(400, "text/plain", "Invalid settings or NVS write failed.");
     return;
   }
   server.send(200, "text/plain; charset=utf-8", "Zapisano w NVS. Restart za chwilę.");
@@ -490,9 +590,9 @@ void handleUpload() {
 }
 
 void otaLoop() {
-  if (!otaStarted && WiFi.status() == WL_CONNECTED && !config.adminPassword.isEmpty()) {
+  if (!otaStarted && WiFi.status() == WL_CONNECTED) {
     ArduinoOTA.setHostname("launchpad-esp32");
-    ArduinoOTA.setPassword(config.adminPassword.c_str());
+    if (!config.adminPassword.isEmpty()) ArduinoOTA.setPassword(config.adminPassword.c_str());
     ArduinoOTA.onStart([] {
       arduinoActive = releaseUpdater.acquire();
       uploadLastData = millis();
@@ -540,6 +640,8 @@ void setup() {
   releaseUpdater.begin();
   server.on("/", HTTP_GET, rootPage);
   server.on("/status", HTTP_GET, statusPage);
+  server.on("/control", HTTP_POST, controlBulb);
+  server.on("/check-update", HTTP_POST, checkUpdate);
   server.on("/settings", HTTP_GET, settingsPage);
   server.on("/settings", HTTP_POST, saveSettings);
   server.on("/update", HTTP_GET, updatePage);
