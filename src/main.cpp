@@ -21,6 +21,7 @@ String csrf;
 String apName;
 bool apActive = false;
 bool mqttStarted = false;
+bool mqttAttempted = false;
 bool otaStarted = false;
 bool arduinoActive = false;
 bool uploadOwned = false;
@@ -124,11 +125,13 @@ void commandBulb(uint8_t index) {
 }
 
 void brokerLoop() {
-  if (!mqttStarted && WiFi.status() == WL_CONNECTED && config.confirmed) {
+  if (!mqttAttempted && WiFi.status() == WL_CONNECTED && config.confirmed) {
+    mqttAttempted = true;
     mqttStarted = mqtt.begin();
   }
   if (!mqttStarted) return;
   if (mqtt.consumeOverflow()) {
+    mqtt.invalidateCommands();
     for (auto &bulb : bulbs) bulb.reachable = false;
     for (uint8_t index = 0; index < 4; ++index) {
       mqtt.subscribe(topicFor(index, "/availability"));
@@ -159,6 +162,7 @@ void brokerLoop() {
         state.toLowerCase();
         if (state != "online" && state != "offline") break;
         const bool preset = domain::availability(bulbs[index], state == "online");
+        if (state == "offline") mqtt.invalidateCommands();
         if (preset) commandBulb(index);
         draw();
         break;
@@ -317,7 +321,7 @@ void statusPage() {
 String pageStart(const char *title) {
   return String("<!doctype html><html lang='pl'><meta charset='utf-8'>") +
     "<meta name='viewport' content='width=device-width,initial-scale=1'><title>" + title +
-    "</title><style>body{font:16px system-ui;max-width:850px;margin:2rem auto;padding:1rem;" 
+    "</title><style>body{font:16px system-ui;max-width:850px;margin:2rem auto;padding:1rem;"
     "background:#121821;color:#eaf0f7}a{color:#8bd4ff}label{display:block;margin-top:1rem}"
     "input{padding:.5rem;max-width:95%}button{margin-top:1.5rem;padding:.8rem}"
     "table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #567}</style><body><h1>" +

@@ -22,6 +22,7 @@ class MqttBridge {
   bool receive(BrokerEvent &event);
   bool publish(const String &topic, const String &payload);
   void subscribe(const String &topic);
+  void invalidateCommands() { ++generation_; }
   bool consumeOverflow() { return overflow_.exchange(false); }
  private:
   static void event(void *argument, esp_event_base_t base, int32_t kind, void *data);

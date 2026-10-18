@@ -67,8 +67,10 @@ def main():
     private_key = serialization.load_pem_private_key(pem, password=None)
     if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(private_key.curve, ec.SECP256R1):
         raise ValueError("Expected ECDSA P-256 private key")
-    if private_key.public_key().public_bytes(serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo) != public_key:
+    trusted_key = serialization.load_pem_public_key(public_key)
+    if private_key.public_key().public_bytes(serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo) != trusted_key.public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo):
         raise ValueError("Signing key does not match firmware trust anchor")
     body = (json.dumps(create_manifest(binary, version), sort_keys=True, separators=(",", ":")) + "\n").encode()
     signature = private_key.sign(body, ec.ECDSA(hashes.SHA256()))

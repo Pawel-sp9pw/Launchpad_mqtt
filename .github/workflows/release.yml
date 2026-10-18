@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: requirements-dev.txt
       - name: Check signing configuration and unused version
         env:
           OTA_SIGNING_KEY_PEM: ${{ secrets.OTA_SIGNING_KEY_PEM }}
@@ -35,6 +36,7 @@ jobs:
           echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
       - run: pip install -r requirements-dev.txt
       - run: g++ -std=c++11 -Wall -Wextra -Werror -I include tests/domain_test.cpp -o /tmp/domain-test && /tmp/domain-test
+      - run: g++ -std=c++11 -Wall -Wextra -Werror -I include -I tests/fakes tests/nvs_guard_test.cpp src/NvsGuard.cpp -o /tmp/nvs-test && /tmp/nvs-test
       - run: pytest -q
       - run: pio run
       - name: Sign and verify immutable manifest
