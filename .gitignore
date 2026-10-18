@@ -1,0 +1,12 @@
+.pio/
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+*.pem
+!certs/*.pem
+!keys/release-public.pem
+*.key
+secrets*
+platformio.override.ini
+
